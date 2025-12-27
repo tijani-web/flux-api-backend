@@ -1,0 +1,552 @@
+// prisma/schema.prisma
+generator client { 
+  provider = "prisma-client-js" 
+}
+
+datasource db {
+  provider = "postgresql"
+  url = env("DATABASE_URL")
+}
+
+// ===== CORE USER MANAGEMENT =====
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String?
+  name      String
+  avatar    String?
+  role      UserRole @default(USER)
+  
+  emailVerified Boolean @default(false)
+  verificationToken String?
+  resetToken        String?
+  resetTokenExpiry  DateTime?
+
+  oauthAccounts   OAuthAccount[]
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  projects     Project[]          
+  collaborations ProjectCollaborator[] 
+
+  sentInvitations     ProjectInvitation[] @relation("invitedBy") 
+  receivedInvitations ProjectInvitation[] @relation("invitedUser") 
+  apiKeys      ApiKey[]
+  sessions     Session[]
+  executionLogs       ExecutionLog[]
+  collaborationSessions CollaborationSession[]
+  aiUsages           AiUsage[]
+  projectExports     ProjectExport[]
+
+  mockDataSaveLogs MockDataSaveLog[]
+  
+  @@map("users")
+}
+
+enum UserRole {
+  USER
+  ADMIN
+  SUPER_ADMIN
+}
+
+// ===== OAUTH ACCOUNTS =====
+model OAuthAccount {
+  id          String    @id @default(cuid())
+  provider    String    
+  providerId  String    
+  email       String
+  username    String?
+  avatar      String?
+  
+  // Relations
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId      String
+  
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([provider, providerId])
+  @@unique([provider, userId])
+  @@map("oauth_accounts")
+}
+
+// ===== PROJECT SYSTEM =====
+model Project {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  slug        String   @unique 
+  version     String   @default("1.0.0")
+  visibility  ProjectVisibility @default(PRIVATE)
+  
+  owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  ownerId String
+  
+  collaborators ProjectCollaborator[]
+  invitations ProjectInvitation[] 
+  
+  endpoints    Endpoint[]
+  mockData     MockDataCollection[]
+  environments Environment[]
+  webhooks     Webhook[]
+  executionLogs ExecutionLog[]
+  aiUsages      AiUsage[]
+  exports       ProjectExport[]
+
+  collaborationSessions CollaborationSession[]
+  
+  settings Json? 
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  deletedAt DateTime? 
+  
+  @@index([ownerId])
+  @@index([slug])
+  @@map("projects")
+}
+
+enum ProjectVisibility {
+  PRIVATE
+  TEAM  
+  PUBLIC
+}
+
+// ===== COLLABORATION SYSTEM =====
+model ProjectCollaborator {
+  id        String @id @default(cuid())
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId String
+  user      User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  role      CollaboratorRole @default(EDITOR)
+  
+  invitedBy   String 
+  invitedAt   DateTime @default(now())
+  joinedAt    DateTime?
+  createdAt DateTime @default(now()) 
+  updatedAt DateTime @updatedAt     
+  
+  canEdit    Boolean @default(true)
+  canInvite  Boolean @default(false)
+  canDelete  Boolean @default(false)
+
+  invitationId  String?
+  
+  @@unique([projectId, userId])
+  @@map("project_collaborators")
+}
+
+model ProjectInvitation {
+  id          String   @id @default(cuid())
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId   String
+  email       String
+  role        CollaboratorRole @default(EDITOR)
+  token       String   @unique
+  status      InvitationStatus @default(PENDING)
+  
+  invitedBy   User     @relation(fields: [invitedById], references: [id], name: "invitedBy")
+  invitedById String
+  
+  user        User?    @relation(fields: [userId], references: [id], name: "invitedUser")
+  userId      String?
+  
+  expiresAt   DateTime?
+
+  lastSentAt  DateTime?
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@unique([projectId, email, status])
+  @@index([token])
+  @@index([expiresAt])
+  @@map("project_invitations")
+}
+
+enum CollaboratorRole {
+  VIEWER
+  EDITOR
+  ADMIN
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+  REVOKED
+  EXPIRED
+}
+
+
+// ===== API ENDPOINTS =====
+model Endpoint {
+  id          String @id @default(cuid())
+  project     Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId   String
+  
+  path        String   
+  method      HttpMethod
+  name        String   
+  description String?
+  
+  code        String   
+  timeout     Int      @default(5000) 
+  memoryLimit Int      @default(128)  
+  
+  requestSchema  Json? 
+  responseSchema Json? 
+  
+  headers     Json? 
+  queryParams Json? 
+  pathParams  Json? 
+  
+  isActive    Boolean @default(true)
+  isPublic    Boolean @default(false)
+  
+  callCount   Int     @default(0)
+  lastCalled  DateTime?
+  
+  executionLogs ExecutionLog[]
+  aiUsages      AiUsage[]
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  version   String @default("1.0.0")
+  
+  @@index([projectId, path, method])
+  @@unique([projectId, path, method, version])
+  @@map("endpoints")
+}
+
+enum HttpMethod {
+  GET
+  POST
+  PUT
+  DELETE
+  PATCH
+  HEAD
+  OPTIONS
+}
+
+// ===== WEBHOOK SYSTEM =====
+model Webhook {
+  id              String   @id @default(cuid())
+  project         Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId       String
+  
+  name            String
+  url             String
+  events          String[]  
+  secret          String    @default(dbgenerated("gen_random_uuid()"))
+  isActive        Boolean   @default(true)
+  
+  successCount    Int       @default(0)
+  failureCount    Int       @default(0)
+  lastTriggeredAt DateTime?
+  
+  createdBy       String    
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  
+  deliveries      WebhookDelivery[]
+  
+  @@index([projectId])
+  @@index([createdAt])
+  @@map("webhooks")
+}
+
+model WebhookDelivery {
+  id          String   @id @default(cuid())
+  webhook     Webhook  @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+  webhookId   String
+  
+  url         String
+  payload     Json
+  success     Boolean
+  statusCode  Int?
+  responseBody String?   @db.Text
+  error       String?    @db.Text
+  responseTime Int?      
+  
+  event       String?
+  triggeredBy String?    
+  
+  createdAt   DateTime @default(now())
+  
+  @@index([webhookId])
+  @@index([createdAt])
+  @@index([success])
+  @@map("webhook_deliveries")
+}
+
+ // ===== MOCK DATA COLLECTIONS =====
+model MockDataCollection {
+  id            String @id @default(cuid())
+  project       Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId     String
+  
+  name          String 
+  description   String?
+  schema        Json?  
+  data          Json   
+  
+  isSeedData    Boolean @default(false) 
+  
+  metadata     Json?   
+
+  saveLogs      MockDataSaveLog[]
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  @@index([projectId, name])
+  @@map("mock_data_collections")
+}
+
+// ===== MOCK DATA SAVE LOGS =====
+model MockDataSaveLog {
+  id                String   @id @default(cuid())
+  
+  // Collection reference
+  collection        MockDataCollection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  collectionId      String
+  
+  // User who saved
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId            String
+  
+  // Operation details
+  operation         SaveOperationType
+  itemCount         Int
+  executionContext  Json?    
+  metadata          Json?    
+  
+  // Timestamps
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  
+  @@index([collectionId])
+  @@index([userId])
+  @@index([createdAt])
+  @@map("mock_data_save_logs")
+}
+
+enum SaveOperationType {
+  SAVE_FROM_EXECUTION
+  MANUAL_UPDATE
+  ROLLBACK
+  IMPORT
+  AI_GENERATION
+}
+
+// ===== ENVIRONMENT VARIABLES =====
+model Environment {
+  id        String @id @default(cuid())
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId String
+  
+  name      String 
+  variables Json   
+  
+  isDefault Boolean @default(false)
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  @@unique([projectId, name])
+  @@map("environments")
+}
+
+// ===== API KEYS & AUTH =====
+model ApiKey {
+  id        String   @id @default(cuid())
+  name      String
+  key       String   @unique
+  prefix    String   
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  
+  permissions Json? 
+  
+  expiresAt DateTime?
+  
+  lastUsed  DateTime?
+  callCount Int     @default(0)
+  
+  executionLogs ExecutionLog[]
+  
+  createdAt DateTime @default(now())
+  
+  @@index([userId])
+  @@map("api_keys")
+}
+
+// ===== SESSIONS & SECURITY =====
+model Session {
+  id        String   @id @default(cuid())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  token     String   @unique
+  userAgent String?
+  ipAddress String?
+  
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  
+  @@index([userId])
+  @@index([token])
+  @@map("sessions")
+}
+
+// ===== EXECUTION LOGS =====
+model ExecutionLog {
+  id          String   @id @default(cuid())
+  endpoint    Endpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+  endpointId  String
+  project     Project  @relation(fields: [projectId], references: [id])
+  projectId   String
+  
+  method      HttpMethod
+  path        String
+  statusCode  Int
+  requestBody Json?
+  queryParams Json?
+  pathParams  Json?
+  headers     Json?
+  
+  responseBody Json?
+  responseTime Int 
+  memoryUsed   Int? 
+  
+  logs        String[] 
+  error       String?
+  sandboxId   String? 
+  
+  apiKey      ApiKey? @relation(fields: [apiKeyId], references: [id])
+  apiKeyId    String?
+  userId      String? 
+  
+  user        User?   @relation(fields: [userId], references: [id])
+
+  mockDataCollectionId String?   @map("mock_data_collection_id")
+  environmentId        String?   @map("environment_id")
+  
+  createdAt DateTime @default(now())
+
+  metadata    Json?    @map("metadata")
+
+  
+  @@index([endpointId])
+  @@index([projectId])
+  @@index([createdAt])
+  @@index([statusCode])
+  @@map("execution_logs")
+}
+
+
+// ===== REAL-TIME COLLABORATION =====
+model CollaborationSession {
+  id        String @id @default(cuid())
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId String
+  
+  socketId  String
+  user      User @relation(fields: [userId], references: [id])
+  userId    String
+  
+  activeEndpoint String? 
+  cursorPosition Json?   
+  selection      Json?   
+  
+  joinedAt  DateTime @default(now())
+  lastActivity DateTime @default(now())
+  
+  @@index([projectId])
+  @@index([socketId])
+  @@map("collaboration_sessions")
+}
+
+// ===== AI USAGE TRACKING =====
+model AiUsage {
+  id            String   @id @default(cuid())
+  user          User     @relation(fields: [userId], references: [id])
+  userId        String
+  
+  provider      AiProvider @default(GEMINI)
+  model         String
+  action        AiAction
+  
+  inputTokens   Int
+  outputTokens  Int
+  cost          Float
+  
+  prompt        String?   @db.Text
+  response      String?   @db.Text
+  error         String?   @db.Text
+  executionTime Int?      
+  
+  project       Project?  @relation(fields: [projectId], references: [id])
+  projectId     String?
+  endpoint      Endpoint? @relation(fields: [endpointId], references: [id])
+  endpointId    String?
+  
+  createdAt     DateTime  @default(now())
+  
+  @@index([userId])
+  @@index([projectId])
+  @@index([createdAt])
+  @@map("ai_usage")
+}
+
+enum AiProvider {
+  GEMINI
+  OPENAI 
+}
+
+enum AiAction {
+  CODE_GENERATION
+  CODE_OPTIMIZATION
+  ERROR_RESOLUTION
+  TEST_GENERATION
+  DOCUMENTATION
+  CODE_REVIEW
+}
+
+// ===== FILE EXPORTS =====
+model ProjectExport {
+  id        String @id @default(cuid())
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  projectId String
+  user      User @relation(fields: [userId], references: [id])
+  userId    String
+  
+  format    ExportFormat
+  include   Json? 
+  fileUrl   String? 
+  
+  status    ExportStatus @default(PENDING)
+  error     String?
+  
+  createdAt DateTime @default(now())
+  
+  @@index([projectId])
+  @@map("project_exports")
+}
+
+enum ExportFormat {
+  POSTMAN
+  OPENAPI
+  INSOMNIA
+  CUSTOM_JSON
+}
+
+enum ExportStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
