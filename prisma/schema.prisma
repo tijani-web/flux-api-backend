@@ -83,6 +83,11 @@ model Project {
   owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   ownerId String
   
+  endpointCount   Int @default(0)
+  mockDataCount   Int @default(0)
+  webhookCount    Int @default(0)
+  environmentCount Int @default(0)
+  
   collaborators ProjectCollaborator[]
   invitations ProjectInvitation[] 
   
