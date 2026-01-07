@@ -300,7 +300,7 @@ class DockerManager {
   // Get Docker image for language
 getImageForLanguage(language) {
   const images = {
-    node: 'node:20-alpine',   
+    node: 'node:18-alpine',
     python: 'python:3.9-alpine',
   };
 
